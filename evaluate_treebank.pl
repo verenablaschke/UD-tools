@@ -11,6 +11,29 @@ binmode(STDOUT, ':utf8');
 binmode(STDERR, ':utf8');
 use Getopt::Long;
 use File::Which; # find executable files in $PATH
+## VB: copy-pasted the next lines (15-36) from https://github.com/UniversalDependencies/tools/blob/master/check_files.pl
+# We need to tell Perl where to find my udlib module (same folder as this script).
+# While we are at it, we will also remember the path to the superordinate folder,
+# which should be the UD root (all UD treebanks should be its subfolders).
+BEGIN
+{
+    use Cwd;
+    my $path = $0;
+    $path =~ s:\\:/:g;
+    my $currentpath = getcwd();
+    $libpath = $currentpath;
+    if($path =~ m:/:)
+    {
+        $path =~ s:/[^/]*$:/:;
+        chdir($path);
+        $libpath = getcwd();
+    }
+    chdir('..');
+    $udpath = getcwd();
+    chdir($currentpath);
+    #print STDERR ("libpath=$libpath\n");
+}
+use lib $libpath;
 use udlib;
 
 my $verbose = 0;

@@ -1,3 +1,17 @@
+Usage:
+```
+perl evaluate_treebank.pl -verbose UD-HDT-2.0/
+```
+
+If there are issues with the validator:
+```
+chmod +x validate.py
+```
+
+
+
+---
+
 # UD Tools
 
 [![alt text](https://avatars0.githubusercontent.com/u/7457237?s=200&v=4 "Universal Dependencies")](http://universaldependencies.org/)
