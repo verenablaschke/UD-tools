@@ -78,35 +78,34 @@ def warn(msg, testclass, testlevel, testid, lineno=0, nodeid=0, explanation=None
     """
     global curr_fname, curr_line, sentence_line, sentence_id, error_counter, args
     error_counter[testclass] = error_counter.get(testclass, 0)+1
-    if not args.quiet:
-        if args.max_err > 0 and error_counter[testclass] == args.max_err:
+    if args.max_err > 0 and error_counter[testclass] > args.max_err:
+        if error_counter[testclass] == args.max_err + 1:
             print(('...suppressing further errors regarding ' + testclass), file=sys.stderr)
-        elif args.max_err > 0 and error_counter[testclass] > args.max_err:
-            pass # suppressed
+        pass # supressed
+    elif not args.quiet:
+        if explanation and error_counter[testclass] == 1:
+            msg += ' ' + explanation
+        if len(args.input) > 1: # several files, should report which one
+            if curr_fname=='-':
+                fn = '(in STDIN) '
+            else:
+                fn = '(in '+os.path.basename(curr_fname)+') '
         else:
-            if explanation and error_counter[testclass] == 1:
-                msg += ' ' + explanation
-            if len(args.input) > 1: # several files, should report which one
-                if curr_fname=='-':
-                    fn = '(in STDIN) '
-                else:
-                    fn = '(in '+os.path.basename(curr_fname)+') '
-            else:
-                fn = ''
-            sent = ''
-            node = ''
-            # Global variable (last read sentence id): sentence_id
-            # Originally we used a parameter sid but we probably do not need to override the global value.
-            if sentence_id:
-                sent = ' Sent ' + sentence_id
-            if nodeid:
-                node = ' Node ' + str(nodeid)
-            if lineno > 0:
-                print("[%sLine %d%s%s]: [L%d %s %s] %s" % (fn, lineno, sent, node, testlevel, testclass, testid, msg), file=sys.stderr)
-            elif lineno < 0:
-                print("[%sLine %d%s%s]: [L%d %s %s] %s" % (fn, sentence_line, sent, node, testlevel, testclass, testid, msg), file=sys.stderr)
-            else:
-                print("[%sLine %d%s%s]: [L%d %s %s] %s" % (fn, curr_line, sent, node, testlevel, testclass, testid, msg), file=sys.stderr)
+            fn = ''
+        sent = ''
+        node = ''
+        # Global variable (last read sentence id): sentence_id
+        # Originally we used a parameter sid but we probably do not need to override the global value.
+        if sentence_id:
+            sent = ' Sent ' + sentence_id
+        if nodeid:
+            node = ' Node ' + str(nodeid)
+        if lineno > 0:
+            print("[%sLine %d%s%s]: [L%d %s %s] %s" % (fn, lineno, sent, node, testlevel, testclass, testid, msg), file=sys.stderr)
+        elif lineno < 0:
+            print("[%sLine %d%s%s]: [L%d %s %s] %s" % (fn, sentence_line, sent, node, testlevel, testclass, testid, msg), file=sys.stderr)
+        else:
+            print("[%sLine %d%s%s]: [L%d %s %s] %s" % (fn, curr_line, sent, node, testlevel, testclass, testid, msg), file=sys.stderr)
 
 ###### Support functions
 ws_re = re.compile(r"^\s+$")
@@ -142,7 +141,7 @@ def lspec2ud(deprel):
 # Level 1 tests. Only CoNLL-U backbone. Values can be empty or non-UD.
 #==============================================================================
 
-sentid_re=re.compile('^# sent_id\s*=\s*(\S+)$')
+sentid_re=re.compile(r"^# sent_id\s*=\s*(\S+)$")
 def trees(inp, tag_sets, args):
     """
     `inp` a file-like object yielding lines as unicode
@@ -270,8 +269,8 @@ def validate_unicode_normalization(text):
         testmessage = "Unicode not normalized: %s.character[%d] is %s, should be %s." % (COLNAMES[firsti], firstj, inpfirst, nfcfirst)
         warn(testmessage, testclass, testlevel, testid)
 
-whitespace_re = re.compile('.*\s', re.U)
-whitespace2_re = re.compile('.*\s\s', re.U)
+whitespace_re = re.compile(r".*\s", re.U)
+whitespace2_re = re.compile(r".*\s\s", re.U)
 def validate_cols_level1(cols):
     """
     Tests that can run on a single line and pertain only to the CoNLL-U file
@@ -329,7 +328,7 @@ def validate_cols_level1(cols):
 
 ##### Tests applicable to the whole tree
 
-interval_re = re.compile('^([0-9]+)-([0-9]+)$', re.U)
+interval_re = re.compile(r"^([0-9]+)-([0-9]+)$", re.U)
 def validate_ID_sequence(tree):
     """
     Validates that the ID sequence is correctly formed.
@@ -497,9 +496,9 @@ def validate_sent_id(comments, known_ids, lcode):
             warn(testmessage, testclass, testlevel, testid)
         known_ids.add(sid)
 
-newdoc_re = re.compile('^#\s*newdoc(\s|$)')
-newpar_re = re.compile('^#\s*newpar(\s|$)')
-text_re = re.compile('^#\s*text\s*=\s*(.+)$')
+newdoc_re = re.compile(r"^#\s*newdoc(\s|$)")
+newpar_re = re.compile(r"^#\s*newpar(\s|$)")
+text_re = re.compile(r"^#\s*text\s*=\s*(.+)$")
 def validate_text_meta(comments, tree):
     # Remember if SpaceAfter=No applies to the last word of the sentence.
     # This is not prohibited in general but it is prohibited at the end of a paragraph or document.
@@ -507,6 +506,8 @@ def validate_text_meta(comments, tree):
     # In trees(), sentence_line was already moved to the first token/node line
     # after the sentence comment lines. While this is useful in most validation
     # functions, it complicates things here where we also work with the comments.
+    # warn(lineno=-1) will print the sentence_line, i.e., after the comments.
+    # warn() without lineno will refer to the empty line after the sentence.
     global sentence_line
     testlevel = 2
     testclass = 'Metadata'
@@ -526,29 +527,29 @@ def validate_text_meta(comments, tree):
     if len(newdoc_matched) > 1:
         testid = 'multiple-newdoc'
         testmessage = 'Multiple newdoc attributes.'
-        warn(testmessage, testclass, testlevel, testid)
+        warn(testmessage, testclass, testlevel, testid, lineno=-1)
     if len(newpar_matched) > 1:
         testid = 'multiple-newpar'
         testmessage = 'Multiple newpar attributes.'
-        warn(testmessage, testclass, testlevel, testid)
+        warn(testmessage, testclass, testlevel, testid, lineno=-1)
     if (newdoc_matched or newpar_matched) and spaceafterno_in_effect:
         testid = 'spaceafter-newdocpar'
         testmessage = 'New document or paragraph starts when the last token of the previous sentence says SpaceAfter=No.'
-        warn(testmessage, testclass, testlevel, testid)
+        warn(testmessage, testclass, testlevel, testid, lineno=-1)
     if not text_matched:
         testid = 'missing-text'
         testmessage = 'Missing the text attribute.'
-        warn(testmessage, testclass, testlevel, testid)
+        warn(testmessage, testclass, testlevel, testid, lineno=-1)
     elif len(text_matched) > 1:
         testid = 'multiple-text'
         testmessage = 'Multiple text attributes.'
-        warn(testmessage, testclass, testlevel, testid)
+        warn(testmessage, testclass, testlevel, testid, lineno=-1)
     else:
         stext = text_matched[0].group(1)
         if stext[-1].isspace():
             testid = 'text-trailing-whitespace'
             testmessage = 'The text attribute must not end with whitespace.'
-            warn(testmessage, testclass, testlevel, testid)
+            warn(testmessage, testclass, testlevel, testid, lineno=-1)
         # Validate the text against the SpaceAfter attribute in MISC.
         skip_words = set()
         mismatch_reported = 0 # do not report multiple mismatches in the same sentence; they usually have the same cause
@@ -565,7 +566,7 @@ def validate_text_meta(comments, tree):
                 testid = 'nospaceafter-yes'
                 testmessage = "'NoSpaceAfter=Yes' should be replaced with 'SpaceAfter=No'."
                 warn(testmessage, testclass, testlevel, testid, lineno=sentence_line+iline)
-            if len([x for x in cols[MISC].split('|') if re.match(r'^SpaceAfter=', x) and x != 'SpaceAfter=No']) > 0:
+            if len([x for x in cols[MISC].split('|') if re.match(r"^SpaceAfter=", x) and x != 'SpaceAfter=No']) > 0:
                 testid = 'spaceafter-value'
                 testmessage = "Unexpected value of the 'SpaceAfter' attribute in MISC. Did you mean 'SpacesAfter'?"
                 warn(testmessage, testclass, testlevel, testid, lineno=sentence_line+iline)
@@ -682,14 +683,14 @@ def validate_empty_node_empty_vals(cols):
 # Lo ... other Unicode letters (all caseless scripts, e.g., Arabic)
 # M .... combining diacritical marks
 # Underscore is allowed between letters but not at beginning, end, or next to another underscore.
-edeprelpart_resrc = '[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(_[\p{Ll}\p{Lm}\p{Lo}\p{M}]+)*';
+edeprelpart_resrc = r'[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(_[\p{Ll}\p{Lm}\p{Lo}\p{M}]+)*';
 # There must be always the universal part, consisting only of ASCII letters.
 # There can be up to three additional, colon-separated parts: subtype, preposition and case.
 # One of them, the preposition, may contain Unicode letters. We do not know which one it is
 # (only if there are all four parts, we know it is the third one).
 # ^[a-z]+(:[a-z]+)?(:[\p{Ll}\p{Lm}\p{Lo}\p{M}]+(_[\p{Ll}\p{Lm}\p{Lo}\p{M}]+)*)?(:[a-z]+)?$
 edeprel_resrc = '^[a-z]+(:[a-z]+)?(:' + edeprelpart_resrc + ')?(:[a-z]+)?$'
-edeprel_re = re.compile(edeprel_resrc, re.U)
+edeprel_re = re.compile(edeprel_resrc)
 deprel_re = re.compile(r"^[a-z]+(:[a-z]+)?$")
 upos_re = re.compile(r"^[A-Z]+$")
 def validate_character_constraints(cols):
@@ -727,8 +728,8 @@ def validate_character_constraints(cols):
             testmessage = "Invalid enhanced relation type: '%s'." % cols[DEPS]
             warn(testmessage, testclass, testlevel, testid)
 
-attr_val_re=re.compile('^([A-Z][A-Za-z0-9]*(?:\[[a-z0-9]+\])?)=(([A-Z0-9][A-Z0-9a-z]*)(,([A-Z0-9][A-Z0-9a-z]*))*)$',re.U)
-val_re=re.compile('^[A-Z0-9][A-Za-z0-9]*',re.U)
+attr_val_re=re.compile(r"^([A-Z][A-Za-z0-9]*(?:\[[a-z0-9]+\])?)=(([A-Z0-9][A-Z0-9a-z]*)(,([A-Z0-9][A-Z0-9a-z]*))*)$")
+val_re=re.compile(r"^[A-Z0-9][A-Za-z0-9]*")
 def validate_features(cols, tag_sets, args):
     """
     Checks general constraints on feature-value format. On level 4 and higher,
@@ -996,8 +997,8 @@ def deps_list(cols):
         raise ValueError('malformed DEPS: %s' % cols[DEPS])
     return deps
 
-basic_head_re = re.compile('^(0|[1-9][0-9]*)$', re.U)
-enhanced_head_re = re.compile('^(0|[1-9][0-9]*)(\.[1-9][0-9]*)?$', re.U)
+basic_head_re = re.compile(r"^(0|[1-9][0-9]*)$")
+enhanced_head_re = re.compile(r"^(0|[1-9][0-9]*)(\.[1-9][0-9]*)?$")
 def validate_ID_references(tree):
     """
     Validates that HEAD and DEPS reference existing IDs.
@@ -1195,30 +1196,30 @@ def validate_misc(tree):
             # But the remaining error messages below assume that ma[1] exists.
             if len(ma) == 1:
                 ma.append('')
-            if re.match(r'^\s', ma[0]):
+            if re.match(r"^\s", ma[0]):
                 testclass = 'Warning' # warning only
                 testid = 'misc-extra-space'
                 testmessage = "MISC attribute name starts with space in '%s=%s'." % (ma[0], ma[1])
                 warn(testmessage, testclass, testlevel, testid, lineno=node_line)
-            elif re.search(r'\s$', ma[0]):
+            elif re.search(r"\s$", ma[0]):
                 testclass = 'Warning' # warning only
                 testid = 'misc-extra-space'
                 testmessage = "MISC attribute name ends with space in '%s=%s'." % (ma[0], ma[1])
                 warn(testmessage, testclass, testlevel, testid, lineno=node_line)
-            elif re.match(r'^\s', ma[1]):
+            elif re.match(r"^\s", ma[1]):
                 testclass = 'Warning' # warning only
                 testid = 'misc-extra-space'
                 testmessage = "MISC attribute value starts with space in '%s=%s'." % (ma[0], ma[1])
                 warn(testmessage, testclass, testlevel, testid, lineno=node_line)
-            elif re.search(r'\s$', ma[1]):
+            elif re.search(r"\s$", ma[1]):
                 testclass = 'Warning' # warning only
                 testid = 'misc-extra-space'
                 testmessage = "MISC attribute value ends with space in '%s=%s'." % (ma[0], ma[1])
                 warn(testmessage, testclass, testlevel, testid, lineno=node_line)
-            if re.match(r'^(SpaceAfter|Lang|Translit|LTranslit|Gloss|LId|LDeriv)$', ma[0]):
+            if re.match(r"^(SpaceAfter|Lang|Translit|LTranslit|Gloss|LId|LDeriv)$", ma[0]):
                 mamap.setdefault(ma[0], 0)
                 mamap[ma[0]] = mamap[ma[0]] + 1
-            elif re.match(r'^\s*(spaceafter|lang|translit|ltranslit|gloss|lid|lderiv)\s*$', ma[0], re.IGNORECASE):
+            elif re.match(r"^\s*(spaceafter|lang|translit|ltranslit|gloss|lid|lderiv)\s*$", ma[0], re.IGNORECASE):
                 testclass = 'Warning' # warning only
                 testid = 'misc-attr-typo'
                 testmessage = "Possible typo (case or spaces) in MISC attribute '%s=%s'." % (ma[0], ma[1])
@@ -1531,6 +1532,34 @@ def validate_upos_vs_deprel(id, tree):
         testmessage = "'fixed' should not be used for proper nouns."
         warn(testmessage, testclass, testlevel, testid, nodeid=id, lineno=tree['linenos'][id])
 
+def validate_flat_foreign(id, tree):
+    """
+    flat:foreign is an optional subtype of flat. It is used to connect two words
+    in a code-switched segment of foreign words if the annotators did not want
+    to provide the analysis according to the source language. If flat:foreign
+    is used, both the parent and the child should have the Foreign=Yes feature
+    and their UPOS tag should be X.
+    """
+    testlevel = 3
+    testclass = 'Warning' # or Morpho
+    child = tree['nodes'][id]
+    if MISC >= len(child):
+        return # this has been already reported in trees()
+    if id == 0:
+        return
+    if child[DEPREL] != 'flat:foreign':
+        return
+    pid = int(child[HEAD])
+    parent = tree['nodes'][pid]
+    if child[UPOS] != 'X' or child[FEATS] != 'Foreign=Yes':
+        testid = 'flat-foreign-upos-feats'
+        testmessage = "The child of a flat:foreign relation should have UPOS X and Foreign=Yes (but no other features)."
+        warn(testmessage, testclass, testlevel, testid, nodeid=id, lineno=tree['linenos'][id])
+    if parent[UPOS] != 'X' or parent[FEATS] != 'Foreign=Yes':
+        testid = 'flat-foreign-upos-feats'
+        testmessage = "The parent of a flat:foreign relation should have UPOS X and Foreign=Yes (but no other features)."
+        warn(testmessage, testclass, testlevel, testid, nodeid=pid, lineno=tree['linenos'][pid])
+
 def validate_left_to_right_relations(id, tree):
     """
     Certain UD relations must always go left-to-right.
@@ -1589,7 +1618,7 @@ def validate_single_subject(id, tree):
         nsubj or csubj without the :outer subtype. Alternatively, instead of the
         :outer subtype, the node could have Subject=Outer in MISC.
         """
-        if not re.search(r'subj', lspec2ud(node[DEPREL])):
+        if not re.search(r"subj", lspec2ud(node[DEPREL])):
             return False
         if re.match(r'^[nc]subj:outer$', node[DEPREL]):
             return False
@@ -1884,10 +1913,11 @@ def validate_fixed_span(id, tree):
         fxdiff = set(fxrange) - set(fxlist)
         fxgap = [i for i in fxdiff if lspec2ud(tree['nodes'][i][DEPREL]) != 'punct']
         if fxgap:
+            fxexpr = ' '.join([(tree['nodes'][i][FORM] if i in fxlist else '*') for i in fxrange])
             testlevel = 3
             testclass = 'Warning'
             testid = 'fixed-gap'
-            testmessage = "Gaps in fixed expression %s" % str(fxlist)
+            testmessage = "Gaps in fixed expression %s '%s'" % (str(fxlist), fxexpr)
             warn(testmessage, testclass, testlevel, testid, nodeid=id, lineno=tree['linenos'][id])
 
 def validate_projective_punctuation(id, tree):
@@ -1918,6 +1948,7 @@ def validate_annotation(tree):
     for node in tree['nodes']:
         id = int(node[ID])
         validate_upos_vs_deprel(id, tree)
+        validate_flat_foreign(id, tree)
         validate_left_to_right_relations(id, tree)
         validate_single_subject(id, tree)
         validate_orphan(id, tree)
@@ -2164,7 +2195,7 @@ def validate_lspec_annotation(tree, lang, tag_sets):
 # releases.
 #==============================================================================
 
-global_entity_re = re.compile('^#\s*global\.Entity\s*=\s*(.+)$')
+global_entity_re = re.compile(r"^#\s*global\.Entity\s*=\s*(.+)$")
 def validate_misc_entity(comments, sentence):
     """
     Optionally checks the well-formedness of the MISC attributes that pertain
@@ -2205,7 +2236,7 @@ def validate_misc_entity(comments, sentence):
             else:
                 line_of_global_entity = comment_start_line + iline
                 global_entity_attribute_string = global_entity_match.group(1)
-                if not re.match(r'^[a-z]+(-[a-z]+)*$', global_entity_attribute_string):
+                if not re.match(r"^[a-z]+(-[a-z]+)*$", global_entity_attribute_string):
                     testid = 'spurious-global-entity'
                     testmessage = "Cannot parse global.Entity attribute declaration '%s'." % (global_entity_attribute_string)
                     warn(testmessage, testclass, testlevel, testid, lineno=comment_start_line+iline)
@@ -2270,9 +2301,9 @@ def validate_misc_entity(comments, sentence):
                 m['text'] += ' '+cols[FORM]
                 m['length'] += 1
         misc = cols[MISC].split('|')
-        entity = [x for x in misc if re.match(r'^Entity=', x)]
-        bridge = [x for x in misc if re.match(r'^Bridge=', x)]
-        splitante = [x for x in misc if re.match(r'^SplitAnte=', x)]
+        entity = [x for x in misc if re.match(r"^Entity=", x)]
+        bridge = [x for x in misc if re.match(r"^Bridge=", x)]
+        splitante = [x for x in misc if re.match(r"^SplitAnte=", x)]
         if '-' in cols[ID] and (len(entity)>0 or len(bridge)>0 or len(splitante)>0):
             testid = 'entity-mwt'
             testmessage = "Entity or coreference annotation must not occur at a multiword-token line."
@@ -2310,7 +2341,7 @@ def validate_misc_entity(comments, sentence):
                 testmessage = "No global.Entity comment was found before the first 'Entity' in MISC."
                 warn(testmessage, testclass, testlevel, testid, lineno=sentence_line+iline)
                 continue
-            match = re.match(r'^Entity=((?:\([^( )]+(?:-[^( )]+)*\)?|[^( )]+\))+)$', entity[0])
+            match = re.match(r"^Entity=((?:\([^( )]+(?:-[^( )]+)*\)?|[^( )]+\))+)$", entity[0])
             if not match:
                 testid = 'spurious-entity-statement'
                 testmessage = "Cannot parse the Entity statement '%s'." % (entity[0])
@@ -2324,20 +2355,20 @@ def validate_misc_entity(comments, sentence):
                 # 0 ... opening bracket; 1 ... closing bracket; 2 ... both brackets
                 entities = []
                 while entity_string:
-                    match = re.match(r'^\(([^( )]+(-[^( )]+)*)\)', entity_string)
+                    match = re.match(r"^\(([^( )]+(-[^( )]+)*)\)", entity_string)
                     if match:
                         entities.append((2, match.group(1)))
-                        entity_string = re.sub(r'^\([^( )]+(-[^( )]+)*\)', '', entity_string, count=1)
+                        entity_string = re.sub(r"^\([^( )]+(-[^( )]+)*\)", '', entity_string, count=1)
                         continue
-                    match = re.match(r'^\(([^( )]+(-[^( )]+)*)', entity_string)
+                    match = re.match(r"^\(([^( )]+(-[^( )]+)*)", entity_string)
                     if match:
                         entities.append((0, match.group(1)))
-                        entity_string = re.sub(r'^\([^( )]+(-[^( )]+)*', '', entity_string, count=1)
+                        entity_string = re.sub(r"^\([^( )]+(-[^( )]+)*", '', entity_string, count=1)
                         continue
-                    match = re.match(r'^([^( )]+)\)', entity_string)
+                    match = re.match(r"^([^( )]+)\)", entity_string)
                     if match:
                         entities.append((1, match.group(1)))
-                        entity_string = re.sub(r'^[^( )]+\)', '', entity_string, count=1)
+                        entity_string = re.sub(r"^[^( )]+\)", '', entity_string, count=1)
                         continue
                     # If we pre-checked the string well, we should never arrive here!
                     warn('INTERNAL ERROR', testclass, 0, 'internal-error')
@@ -2376,7 +2407,7 @@ def validate_misc_entity(comments, sentence):
                     ipart = 1
                     npart = 1
                     eidnpart = eid
-                    match = re.match(r'^(.+)\[([1-9]\d*)/([1-9]\d*)\]$', beid)
+                    match = re.match(r"^(.+)\[([1-9]\d*)/([1-9]\d*)\]$", beid)
                     if match:
                         eid = match.group(1)
                         ipart = int(match.group(2))
@@ -2392,7 +2423,7 @@ def validate_misc_entity(comments, sentence):
                             testmessage = "Entity id '%s' of discontinuous mention says the current part is higher than total number of parts." % (beid)
                             warn(testmessage, testclass, testlevel, testid, lineno=sentence_line+iline)
                     else:
-                        if re.match(r'[\[\]]', beid):
+                        if re.match(r"[\[\]]", beid):
                             testid = 'spurious-entity-id'
                             testmessage = "Entity id '%s' contains square brackets but does not have the form used in discontinuous mentions." % (beid)
                             warn(testmessage, testclass, testlevel, testid, lineno=sentence_line+iline)
@@ -2451,19 +2482,19 @@ def validate_misc_entity(comments, sentence):
                             etype = attributes[entity_attribute_index['etype']]
                             # For etype values tentatively approved for CorefUD 1.0, see
                             # https://github.com/ufal/corefUD/issues/13#issuecomment-1008447464
-                            if not re.match(r'^(person|place|organization|animal|plant|object|substance|time|number|abstract|event|other)?$', etype):
+                            if not re.match(r"^(person|place|organization|animal|plant|object|substance|time|number|abstract|event|other)?$", etype):
                                 testid = 'spurious-entity-type'
                                 testmessage = "Spurious entity type '%s'." % (etype)
                                 warn(testmessage, testclass, testlevel, testid, lineno=sentence_line+iline)
                         if 'identity' in entity_attribute_index and len(attributes) >= entity_attribute_index['identity']+1:
                             identity = attributes[entity_attribute_index['identity']]
                         # Check the form of the head index now. The value will be checked at the end of the mention, when we know the mention length.
+                        head = 0
                         if 'head' in entity_attribute_index and len(attributes) >= entity_attribute_index['head']+1:
-                            if not re.match(r'^[1-9][0-9]*$', attributes[entity_attribute_index['head']]):
+                            if not re.match(r"^[1-9][0-9]*$", attributes[entity_attribute_index['head']]):
                                 testid = 'spurious-mention-head'
                                 testmessage = "Entity head index '%s' must be a non-zero-starting integer." % (attributes[entity_attribute_index['head']])
                                 warn(testmessage, testclass, testlevel, testid, lineno=sentence_line+iline)
-                                head = 0
                             else:
                                 head = int(attributes[entity_attribute_index['head']])
                         # If this is the first mention of the entity, remember the values
@@ -2622,7 +2653,7 @@ def validate_misc_entity(comments, sentence):
             # Now we are done with checking the 'Entity=' statement.
             # If there are also 'Bridge=' or 'SplitAnte=' statements, check them too.
             if len(bridge) > 0:
-                match = re.match(r'^Bridge=([^(< :>)]+<[^(< :>)]+(:[a-z]+)?(,[^(< :>)]+<[^(< :>)]+(:[a-z]+)?)*)$', bridge[0])
+                match = re.match(r"^Bridge=([^(< :>)]+<[^(< :>)]+(:[a-z]+)?(,[^(< :>)]+<[^(< :>)]+(:[a-z]+)?)*)$", bridge[0])
                 if not match:
                     testid = 'spurious-bridge-statement'
                     testmessage = "Cannot parse the Bridge statement '%s'." % (bridge[0])
@@ -2632,7 +2663,7 @@ def validate_misc_entity(comments, sentence):
                     # Hash src<tgt pairs and make sure they are not repeated.
                     srctgt = {}
                     for b in bridges:
-                        match = re.match(r'([^(< :>)]+)<([^(< :>)]+)(?::([a-z]+))?^$', b)
+                        match = re.match(r"([^(< :>)]+)<([^(< :>)]+)(?::([a-z]+))?^$", b)
                         if match:
                             srceid = match.group(1)
                             tgteid = match.group(2)
@@ -2661,7 +2692,7 @@ def validate_misc_entity(comments, sentence):
                             else:
                                 entity_bridge_relations[bridgekey] = {'relation': relation, 'line': sentence_line+iline}
             if len(splitante) > 0:
-                match = re.match(r'^SplitAnte=([^(< :>)]+<[^(< :>)]+(,[^(< :>)]+<[^(< :>)]+)*)$', splitante[0])
+                match = re.match(r"^SplitAnte=([^(< :>)]+<[^(< :>)]+(,[^(< :>)]+<[^(< :>)]+)*)$", splitante[0])
                 if not match:
                     testid = 'spurious-splitante-statement'
                     testmessage = "Cannot parse the SplitAnte statement '%s'." % (splitante[0])
@@ -2672,7 +2703,7 @@ def validate_misc_entity(comments, sentence):
                     srctgt = {}
                     tgtante = {}
                     for a in antecedents:
-                        match = re.match(r'^([^(< :>)]+)<([^(< :>)]+)$', a)
+                        match = re.match(r"^([^(< :>)]+)<([^(< :>)]+)$", a)
                         if match:
                             srceid = match.group(1)
                             tgteid = match.group(2)
@@ -2956,13 +2987,13 @@ def get_edepreldata_for_language(lcode, basic_deprels):
     global edepreldata
     edeprelset = basic_deprels|{'ref'}
     for bdeprel in basic_deprels:
-        if re.match(r'^[nc]subj(:|$)', bdeprel):
+        if re.match(r"^[nc]subj(:|$)", bdeprel):
             edeprelset.add(bdeprel+':xsubj')
     if lcode in edepreldata:
         for c in edepreldata[lcode]:
             for deprel in edepreldata[lcode][c]['extends']:
                 for bdeprel in basic_deprels:
-                    if bdeprel == deprel or re.match(r'^'+deprel+':', bdeprel):
+                    if bdeprel == deprel or re.match(r"^"+deprel+':', bdeprel):
                         edeprelset.add(bdeprel+':'+c)
     return edeprelset
 
@@ -3048,14 +3079,14 @@ def get_auxdata_for_language(lcode):
         for lcode1 in auxdata.keys():
             lemmalist = auxdata[lcode1].keys()
             auxlist = auxlist + [x for x in lemmalist if len([y for y in auxdata[lcode1][x]['functions'] if y['function'] != 'cop.PRON']) > 0]
-            coplist = coplist + [x for x in lemmalist if len([y for y in auxdata[lcode1][x]['functions'] if re.match("^cop\.", y['function'])]) > 0]
+            coplist = coplist + [x for x in lemmalist if len([y for y in auxdata[lcode1][x]['functions'] if re.match(r"^cop\.", y['function'])]) > 0]
     else:
         lemmalist = auxdata.get(lcode, {}).keys()
         auxlist = [x for x in lemmalist if len([y for y in auxdata[lcode][x]['functions'] if y['function'] != 'cop.PRON']) > 0]
-        coplist = [x for x in lemmalist if len([y for y in auxdata[lcode][x]['functions'] if re.match("^cop\.", y['function'])]) > 0]
+        coplist = [x for x in lemmalist if len([y for y in auxdata[lcode][x]['functions'] if re.match(r"^cop\.", y['function'])]) > 0]
     return auxlist, coplist
 
-alt_lang_re = re.compile(r'Lang=(.+)')
+alt_lang_re = re.compile(r"Lang=(.+)")
 def get_alt_language(misc):
     """
     Takes the value of the MISC column for a token and checks it for the
@@ -3122,7 +3153,7 @@ if __name__=="__main__":
         #tagsets[DEPS] = tagsets[DEPREL]|{"ref"}|load_set("deprel.ud","edeprel."+args.lang,validate_enhanced=True)
         tagsets[DEPS] = load_edeprel_set('edeprels.json', args.lang, tagsets[DEPREL])
         tagsets[TOKENSWSPACE] = load_set('tokens_w_space.ud', 'tokens_w_space.'+args.lang)
-        tagsets[TOKENSWSPACE] = [re.compile(regex, re.U) for regex in tagsets[TOKENSWSPACE]] #...turn into compiled regular expressions
+        tagsets[TOKENSWSPACE] = [re.compile(regex) for regex in tagsets[TOKENSWSPACE]] #...turn into compiled regular expressions
         # Read the list of auxiliaries from the JSON file.
         # This file must not be edited directly!
         # Use the web interface at https://quest.ms.mff.cuni.cz/udvalidator/cgi-bin/unidep/langspec/specify_auxiliary.pl instead!

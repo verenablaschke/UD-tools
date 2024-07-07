@@ -13,12 +13,15 @@ dat wil zeggen
 de dato
 direct verkozenen
 dit is
+en andere
 en dergelijke
+plan_Hoog Catharijnen
 in plaats van
 knock down
 knock out
 know how
 met andere woorden
+met name 
 na Christus
 nota bene
 onder ander
@@ -29,6 +32,7 @@ ten gevolge van
 ten name van
 ten opzichte van
 ter plaatse
+te water laten
 tot en met
 voor Christus
 vorig jaar

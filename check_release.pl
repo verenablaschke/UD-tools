@@ -51,10 +51,6 @@ my $include_future = 0;
 my $pull = 0;
 # Validate all CoNLL-U files and report invalid ones?
 my $validate = 0;
-# Recompute statistics of all treebanks and push them to Github?
-my $recompute_stats = 0;
-# Tag all repositories with the new release? (The $tag variable is either empty or it contains the tag.)
-my $tag = ''; # example: 'r1.0'
 # Number of the current release as it is found in README files. Repositories targeting a later release will not be included.
 my $current_release;
 # Month and year when the next release is expected. We use it in the announcement.
@@ -74,9 +70,7 @@ GetOptions
     'oldpath=s'       => \$oldpath,
     'future'          => \$include_future,
     'pull'            => \$pull,
-    'validate'        => \$validate,
-    'stats'           => \$recompute_stats,
-    'tag=s'           => \$tag
+    'validate'        => \$validate
 );
 # Options that change with every release have no defaults and must be specified
 # on the command line. Check that we received them.
@@ -106,170 +100,151 @@ my %contributors;
 my %contributions; # for each contributor find treebanks they contributed to
 my %contacts;
 my %stats;
-my %nw; # number of words in train|dev|test|all; indexed by folder name
-my @unknown_folders; # cannot parse folder name or unknown language
 my @nongit_folders; # folder is not a git repository
 my @empty_folders; # does not contain data
 my @future_folders; # scheduled for a future release (and we did not ask to include future data in the report)
 my @invalid_folders; # at least one .conllu file does not pass validation
 my @released_folders;
-my %tcode_to_treebank_name;
+
+# Get mappings between language names, language codes, folder names, ltcodes,
+# and human-friendly treebank names.
+my @unknown_folders; # cannot parse folder name or unknown language
+my @known_folders; # can parse folder name and known language
+my %folder_codes_names;
 foreach my $folder (@folders)
 {
-    # The name of the folder: 'UD_' + language name + optional treebank identifier.
-    # Example: UD_Ancient_Greek-PROIEL
-    my ($language, $treebank) = udlib::decompose_repo_name($folder);
-    my $langcode;
-    if(defined($language))
+    my $record = get_folder_codes_and_names($folder, $languages_from_yaml);
+    if(defined($record))
     {
-        if(exists($languages_from_yaml->{$language}))
-        {
-            $langcode = $languages_from_yaml->{$language}{lcode};
-            my $key = udlib::get_ltcode_from_repo_name($folder, $languages_from_yaml);
-            $tcode_to_treebank_name{$key} = join(' ', ($language, $treebank));
-            chdir($folder) or die("Cannot enter folder $folder");
-            # Skip folders that are not Git repositories even if they otherwise look OK.
-            if(!-d '.git')
-            {
-                push(@nongit_folders, $folder);
-                chdir('..') or die("Cannot return to the upper folder");
-                next;
-            }
-            # This is a git repository with data.
-            # Make sure it is up-to-date.
-            if($pull)
-            {
-                print("git pull $folder\n");
-                system('git pull --tags');
-                print(`git status`);
-            }
-            # Skip folders that do not contain any data, i.e. CoNLL-U files.
-            my $n = get_number_of_conllu_files('.');
-            if($n==0)
-            {
-                push(@empty_folders, $folder);
-                chdir('..') or die("Cannot return to the upper folder");
-                next;
-            }
-            if(!$valid{$folder})
-            {
-                push(@invalid_folders, $folder);
-                chdir('..') or die("Cannot return to the upper folder");
-                next;
-            }
-            # Check that the expected files are present and that there are no extra files.
-            my @errors;
-            $nw{$folder} = {};
-            if(!udlib::check_files('..', $folder, $key, \@errors, \$n_errors, $nw{$folder}))
-            {
-                print(join('', @errors));
-                splice(@errors);
-            }
-            ###!!! We may want to consolidate somehow the ways how we collect and
-            ###!!! store various statistics. This hash-in-hash is another by-product
-            ###!!! of checking the files in udlib.
-            $stats{$key} = $nw{$folder}{stats};
-            # Read the README file. We need to know whether this repository is scheduled for the upcoming release.
-            my $metadata = udlib::read_readme('.');
-            if(!defined($metadata))
-            {
-                print("$folder: cannot read the README file: $!\n");
-                $n_errors++;
-            }
-            if(exists($metadata->{firstrelease}) && udlib::cmp_release_numbers($metadata->{firstrelease}, $current_release) <= 0)
-            {
-                $metadata->{release} = 1;
-            }
-            if(!$metadata->{release} && !$include_future)
-            {
-                push(@future_folders, $folder);
-                chdir('..') or die("Cannot return to the upper folder");
-                next;
-            }
-            #------------------------------------------------------------------
-            # End of skipping. If we are here, we have a versioned UD folder
-            # with valid data. We know that the folder is going to be released.
-            # Count it and check it for possible problems.
-            $n_folders_with_data++;
-            push(@released_folders, $folder);
-            $languages_with_data{$language}++;
-            my $family = $languages_from_yaml->{$language}{family};
-            if(defined($family))
-            {
-                $family =~ s/^IE/Indo-European/;
-                # Keep only the family, discard the genus if present.
-                $family =~ s/,.*//;
-                $families_with_data{$family}++;
-            }
-            # Check that all required metadata items are present in the README file.
-            if(!udlib::check_metadata($folder, $metadata, \@errors, \$n_errors))
-            {
-                print(join('', @errors));
-                splice(@errors);
-            }
-            # Summarize metadata.
-            if($metadata->{'License'} ne '')
-            {
-                $licenses{$metadata->{'License'}}++;
-            }
-            if($metadata->{'Genre'} ne '')
-            {
-                my @genres = split(/\s+/, $metadata->{'Genre'});
-                foreach my $genre (@genres)
-                {
-                    $genres{$genre}++;
-                }
-            }
-            if($metadata->{'Contributors'} ne '')
-            {
-                my @contributors = split(/;\s*/, $metadata->{'Contributors'});
-                foreach my $contributor (@contributors)
-                {
-                    $contributor =~ s/^\s+//;
-                    $contributor =~ s/\s+$//;
-                    $contributors{$contributor}++;
-                    $contributions{$contributor}{$folder}++;
-                }
-            }
-            if($metadata->{'Contact'} ne '')
-            {
-                my @contacts = split(/[,;]\s*/, $metadata->{'Contact'});
-                foreach my $contact (@contacts)
-                {
-                    $contact =~ s/^\s+//;
-                    $contact =~ s/\s+$//;
-                    $contacts{$contact}++;
-                }
-            }
-            # Recompute statistics of the treebank and push it back to Github.
-            if($recompute_stats)
-            {
-                print("Recomputing statistics of $folder...\n");
-                system('cat *.conllu | ../tools/conllu-stats.pl > stats.xml');
-                print("Pushing statistics to Github...\n");
-                system('git add stats.xml');
-                system('git commit -m "Updated statistics."');
-                if($tag ne '')
-                {
-                    print("Tagging $folder $tag\n");
-                    system("git tag $tag");
-                }
-                system('git push');
-                system('git push --tags');
-            }
-            chdir('..') or die("Cannot return to the upper folder");
-        }
-        else
-        {
-            print("Unknown language $language.\n");
-            push(@unknown_folders, $folder);
-        }
+        $folder_codes_names{$folder} = $record;
+        push(@known_folders, $folder);
     }
     else
     {
-        print("Cannot parse folder name $folder.\n");
+        # One of two possible error messages has been printed in get_folder_codes_and_names().
         push(@unknown_folders, $folder);
     }
+}
+
+# Now examine in more detail those folders for which we know the language.
+foreach my $folder (@known_folders)
+{
+    my $language = $folder_codes_names{$folder}{lname};
+    my $ltcode = $folder_codes_names{$folder}{ltcode};
+    my $family = $folder_codes_names{$folder}{family};
+    chdir($folder) or die("Cannot enter folder $folder");
+    # Skip folders that are not Git repositories even if they otherwise look OK.
+    if(!-d '.git')
+    {
+        push(@nongit_folders, $folder);
+        chdir('..') or die("Cannot return to the upper folder");
+        next;
+    }
+    # This is a git repository with data.
+    # Make sure it is up-to-date.
+    if($pull)
+    {
+        print("git pull $folder\n");
+        system('git pull --tags');
+        print(`git status`);
+    }
+    # Skip folders that do not contain any data, i.e. CoNLL-U files.
+    my $n = get_number_of_conllu_files('.');
+    if($n==0)
+    {
+        push(@empty_folders, $folder);
+        chdir('..') or die("Cannot return to the upper folder");
+        next;
+    }
+    if(!$valid{$folder})
+    {
+        push(@invalid_folders, $folder);
+        chdir('..') or die("Cannot return to the upper folder");
+        next;
+    }
+    # Check that the expected files are present and that there are no extra files.
+    my @errors;
+    my $udlibstats = {};
+    if(!udlib::check_files('..', $folder, $ltcode, \@errors, \$n_errors, $udlibstats))
+    {
+        print(join('', @errors));
+        splice(@errors);
+    }
+    ###!!! We may want to consolidate somehow the ways how we collect and
+    ###!!! store various statistics. This hash-in-hash is another by-product
+    ###!!! of checking the files in udlib.
+    $stats{$folder} = $udlibstats->{stats};
+    # Read the README file. We need to know whether this repository is scheduled for the upcoming release.
+    my $metadata = udlib::read_readme('.');
+    if(!defined($metadata))
+    {
+        print("$folder: cannot read the README file: $!\n");
+        $n_errors++;
+    }
+    if(exists($metadata->{firstrelease}) && udlib::cmp_release_numbers($metadata->{firstrelease}, $current_release) <= 0)
+    {
+        $metadata->{release} = 1;
+    }
+    if(!$metadata->{release} && !$include_future)
+    {
+        push(@future_folders, $folder);
+        chdir('..') or die("Cannot return to the upper folder");
+        next;
+    }
+    #------------------------------------------------------------------
+    # End of skipping. If we are here, we have a versioned UD folder
+    # with valid data. We know that the folder is going to be released.
+    # Count it and check it for possible problems.
+    $n_folders_with_data++;
+    push(@released_folders, $folder);
+    $languages_with_data{$language}++;
+    if(defined($family))
+    {
+        # Keep only the family, discard the genus if present.
+        $family =~ s/,.*//;
+        $families_with_data{$family}++;
+    }
+    # Check that all required metadata items are present in the README file.
+    if(!udlib::check_metadata('..', $folder, $metadata, \@errors, \$n_errors))
+    {
+        print(join('', @errors));
+        splice(@errors);
+    }
+    # Summarize metadata.
+    if($metadata->{'License'} ne '')
+    {
+        $licenses{$metadata->{'License'}}++;
+    }
+    if($metadata->{'Genre'} ne '')
+    {
+        my @genres = split(/\s+/, $metadata->{'Genre'});
+        foreach my $genre (@genres)
+        {
+            $genres{$genre}++;
+        }
+    }
+    if($metadata->{'Contributors'} ne '')
+    {
+        my @contributors = split(/;\s*/, $metadata->{'Contributors'});
+        foreach my $contributor (@contributors)
+        {
+            $contributor =~ s/^\s+//;
+            $contributor =~ s/\s+$//;
+            $contributors{$contributor}++;
+            $contributions{$contributor}{$folder}++;
+        }
+    }
+    if($metadata->{'Contact'} ne '')
+    {
+        my @contacts = split(/[,;]\s*/, $metadata->{'Contact'});
+        foreach my $contact (@contacts)
+        {
+            $contact =~ s/^\s+//;
+            $contact =~ s/\s+$//;
+            $contacts{$contact}++;
+        }
+    }
+    chdir('..') or die("Cannot return to the upper folder");
 }
 print("$n_errors errors must be fixed.\n") if($n_errors>0);
 print("\n");
@@ -300,19 +275,16 @@ my @families = sort(keys(%families_with_data));
 print(scalar(@families), " families with data: ", join(', ', @families), "\n\n");
 my @languages = map {s/_/ /g; $_} (sort(keys(%languages_with_data)));
 print(scalar(@languages), " languages with data: ", join(', ', @languages), "\n\n");
-my @langcodes = sort(keys(%stats));
-print("Treebank codes: ", join(' ', @langcodes), "\n\n");
-my %langcodes1; map {my $x=$_; $x=~s/_.*//; $langcodes1{$x}++} (@langcodes);
-my @langcodes1 = sort(keys(%langcodes1));
-print("Language codes: ", join(' ', @langcodes1), "\n\n");
+my @folders_with_data = sort(keys(%stats));
+my @ltcodes = map {$folder_codes_names{$_}{ltcode}} (@folders_with_data);
+print("Treebank codes: ", join(' ', @ltcodes), "\n\n");
+my %lcodes; map {$lcodes{$folder_codes_names{$_}{lcode}}++} (@folders_with_data);
+my @lcodes = sort(keys(%lcodes));
+print("Language codes: ", join(' ', @lcodes), "\n\n");
 # Sometimes we need the ISO 639-3 codes (as opposed to the mix of -1 and -3 codes),
 # e.g. when listing the languages in Lindat.
-my %lcode2iso3;
-foreach my $lname (keys(%{$languages_from_yaml}))
-{
-    $lcode2iso3{$languages_from_yaml->{$lname}{lcode}} = $languages_from_yaml->{$lname}{iso3};
-}
-my @iso3codes = sort(grep {defined($_) && $_ ne '' && !m/^q[a-t][a-z]$/} (map {$lcode2iso3{$_}} (@langcodes1)));
+my %iso3codes; map {$iso3codes{$folder_codes_names{$_}{iso3}}++} (@folders_with_data);
+my @iso3codes = sort(grep {defined($_) && $_ ne '' && !m/^q[a-t][a-z]$/} (keys(%iso3codes)));
 print(scalar(@iso3codes), " ISO 639-3 codes: ", join(' ', @iso3codes), "\n\n");
 my @licenses = sort(keys(%licenses));
 print(scalar(@licenses), " different licenses: ", join(', ', @licenses), "\n\n");
@@ -349,76 +321,49 @@ print(scalar(@contributors), " contributors: ", join('; ', @contributors), "\n\n
 my @contacts = sort(keys(%contacts));
 print(scalar(@contacts), " contacts: ", join(', ', @contacts), "\n\n");
 # Find treebanks whose data size has changed.
-print("Collecting statistics of $oldpath...\n");
-my $stats11 = collect_statistics_about_ud_release($oldpath);
-my @languages11 = sort(keys(%{$stats11}));
-foreach my $l (@languages11)
+my ($changelog, $newlanguages) = compare_with_previous_release($oldpath, \%stats, \%folder_codes_names, $languages_from_yaml);
+# Summarize the statistics of the current treebanks. Especially the total
+# number of sentences, tokens and words is needed for the metadata in Lindat.
+print("\nSizes of treebanks in the new release:\n\n");
+my ($nsent, $ntok, $nfus, $nword, $table, $maxl) = summarize_statistics(\%stats);
+foreach my $row (@{$table})
 {
-    if($stats11->{$l}{ntok}  != $stats{$l}{ntok}  ||
-       $stats11->{$l}{nword} != $stats{$l}{nword} ||
-       $stats11->{$l}{nfus}  != $stats{$l}{nfus}  ||
-       $stats11->{$l}{nsent} != $stats{$l}{nsent})
+    my @out;
+    for(my $i = 0; $i <= $#{$row}; $i++)
     {
-        print("$l\tt=$stats11->{$l}{ntok}\tw=$stats11->{$l}{nword}\tf=$stats11->{$l}{nfus}\ts=$stats11->{$l}{nsent}\n");
-        print(" NOW:\tt=$stats{$l}{ntok}\tw=$stats{$l}{nword}\tf=$stats{$l}{nfus}\ts=$stats{$l}{nsent}\n");
+        my $npad = $maxl->[$i]-length($row->[$i]);
+        if($i == 0)
+        {
+            push(@out, $row->[$i].' '.('.' x $npad));
+        }
+        else
+        {
+            push(@out, (' ' x $npad).$row->[$i]);
+        }
+        push(@out, $padded);
+    }
+    print(join('   ', @out), "\n");
+}
+print("--------------------------------------------------------------------------------\n");
+my @newlanguages = sort(keys(%{$newlanguages}));
+my $nnl = scalar(@newlanguages);
+if($nnl > 0)
+{
+    print("The following $nnl languages are new in this release:\n");
+    my $maxl = 0;
+    foreach my $l (@newlanguages)
+    {
+        if(length($l) > $maxl)
+        {
+            $maxl = length($l);
+        }
+    }
+    foreach my $l (@newlanguages)
+    {
+        my $pad = ' ' x ($maxl-length($l));
+        print("$newlanguages->{$l}{lcode}\t$newlanguages->{$l}{iso3}\t$l$pad\t($newlanguages->{$l}{family})\n");
     }
 }
-print("\n");
-# Treebanks can appear, disappear and reappear. Get the list of all treebanks
-# that are part either of this or of the previous release.
-my %lastcurrtreebanks;
-foreach my $t (@langcodes, @languages11)
-{
-    $lastcurrtreebanks{$t}++;
-}
-# Find treebanks whose size has changed by more than 10%.
-my @changedsize;
-my $codemaxl = 0;
-my $namemaxl = 0;
-my $oldmaxl = 0;
-my $newmaxl = 0;
-foreach my $t (sort(keys(%lastcurrtreebanks)))
-{
-    my $oldsize = exists($stats11->{$t}) ? $stats11->{$t}{nword} : 0;
-    my $newsize = exists($stats{$t}) ? $stats{$t}{nword} : 0;
-    if($newsize > $oldsize * 1.1 || $newsize < $oldsize * 0.9)
-    {
-        my %record =
-        (
-            'code' => $t,
-            'name' => $tcode_to_treebank_name{$t},
-            'old'  => $oldsize,
-            'new'  => $newsize
-        );
-        push(@changedsize, \%record);
-        $codemaxl = length($t) if(length($t) > $codemaxl);
-        $namemaxl = length($record{name}) if(length($record{name}) > $namemaxl);
-        $oldmaxl = length($oldsize) if(length($oldsize) > $oldmaxl);
-        $newmaxl = length($newsize) if(length($newsize) > $newmaxl);
-    }
-}
-my $nchangedsize = scalar(@changedsize);
-my $changelog = "The size of the following $nchangedsize treebanks changed significantly since the last release:\n";
-foreach my $r (sort {$a->{name} cmp $b->{name}} (@changedsize))
-{
-    my $padding = ' ' x ($namemaxl - length($r->{name}));
-    $changelog .= sprintf("    %s: %${oldmaxl}d → %${newmaxl}d\n", $r->{name}.$padding, $r->{old}, $r->{new}); # right arrow is \x{2192}
-}
-# Collect statistics of the current treebanks. Especially the total number of
-# sentences, tokens and words is needed for the metadata in Lindat.
-my $ntok = 0;
-my $nword = 0;
-my $nfus = 0;
-my $nsent = 0;
-foreach my $l (@langcodes)
-{
-    print("$l\tt=$stats{$l}{ntok}\tw=$stats{$l}{nword}\tf=$stats{$l}{nfus}\ts=$stats{$l}{nsent}\n");
-    $ntok += $stats{$l}{ntok};
-    $nword += $stats{$l}{nword};
-    $nfus += $stats{$l}{nfus};
-    $nsent += $stats{$l}{nsent};
-}
-print("TOTAL\tt=$ntok\tw=$nword\tf=$nfus\ts=$nsent\n");
 print("--------------------------------------------------------------------------------\n");
 my $announcement = get_announcement
 (
@@ -430,9 +375,55 @@ my $announcement = get_announcement
     $announcement_max_size,
     $next_release_expected,
     \@contributors_firstlast,
-    $changelog
+    $changelog,
+    $nsent,
+    $ntok,
+    $nword
 );
 print($announcement);
+
+
+
+#------------------------------------------------------------------------------
+# Takes a folder name, collects related language / treebank codes and names,
+# puts them in a hash and returns it as a reference. If the folder name does
+# not have expected form or the language is unknown, returns undef.
+#------------------------------------------------------------------------------
+sub get_folder_codes_and_names
+{
+    my $folder = shift;
+    my $languages_from_yaml = shift;
+    # The name of the folder: 'UD_' + language name + optional treebank identifier.
+    # Example: UD_Ancient_Greek-PROIEL
+    my ($language, $treebank) = udlib::decompose_repo_name($folder);
+    if(defined($language))
+    {
+        if(exists($languages_from_yaml->{$language}))
+        {
+            my %record =
+            (
+                'lname'  => $language,
+                'lcode'  => $languages_from_yaml->{$language}{lcode},
+                'iso3'   => $languages_from_yaml->{$language}{iso3},
+                'family' => $languages_from_yaml->{$language}{family},
+                'tname'  => $treebank,
+                'ltcode' => udlib::get_ltcode_from_repo_name($folder, $languages_from_yaml),
+                'hname'  => join(' ', ($language, $treebank)) # human-friendly language + treebank name (no 'UD' in the beginning, spaces instead of underscores)
+            );
+            $record{family} =~ s/^IE/Indo-European/;
+            return \%record;
+        }
+        else
+        {
+            print("Unknown language $language.\n");
+        }
+    }
+    else
+    {
+        print("Cannot parse folder name $folder.\n");
+    }
+    return undef;
+}
 
 
 
@@ -445,7 +436,7 @@ sub get_validation_results
     my %valid;
     # After we used this script to select the treebanks automatically,
     # we typically freeze the list in an external file called
-    # released_treebanks.txt (see http://universaldependencies.org/release_checklist_task_force.html#determining-which-treebanks-will-be-released).
+    # released_treebanks.txt (see https://universaldependencies.org/release_checklist_task_force.html#determining-which-treebanks-will-be-released).
     # Download the current validation report. (We could run the validator ourselves
     # but it would take a lot of time.)
     my @validation_report = split(/\n/, get('https://quest.ms.mff.cuni.cz/udvalidator/cgi-bin/unidep/validation-report.pl?text_only'));
@@ -500,19 +491,211 @@ sub collect_statistics_about_ud_release
         # The name of the folder: 'UD_' + language name + treebank identifier.
         # Example: UD_Ancient_Greek-PROIEL
         my ($language, $treebank) = udlib::decompose_repo_name($folder);
-        my $langcode;
         if(-d "$release_path/$folder" && defined($language))
         {
             if(exists($languages_from_yaml->{$language}))
             {
-                $langcode = $languages_from_yaml->{$language}{lcode};
-                my $key = $langcode;
-                $key .= '_'.lc($treebank) if($treebank ne '');
-                $stats{$key} = udlib::collect_statistics_about_ud_treebank("$release_path/$folder", $key);
+                my $ltcode = $languages_from_yaml->{$language}{lcode};
+                $ltcode .= '_'.lc($treebank) if($treebank ne '');
+                $stats{$folder} = udlib::collect_statistics_about_ud_treebank("$release_path/$folder", $ltcode);
             }
         }
     }
     return \%stats;
+}
+
+
+
+#------------------------------------------------------------------------------
+# Summarizes statistics of the current treebanks. Especially the total number
+# of sentences, tokens and words is needed for the metadata in Lindat.
+#------------------------------------------------------------------------------
+sub summarize_statistics
+{
+    my $stats = shift; # hash reference
+    my $nsent = 0;
+    my $ntok = 0;
+    my $nfus = 0;
+    my $nword = 0;
+    my @table;
+    my @maxl;
+    add_table_row(\@table, \@maxl, 'TREEBANK', 'SENTENCES', 'TOKENS', 'FUSED', 'WORDS');
+    my @folders = sort(keys(%{$stats}));
+    foreach my $folder (@folders)
+    {
+        add_table_row(\@table, \@maxl, $folder, $stats->{$folder}{nsent}, $stats->{$folder}{ntok}, $stats->{$folder}{nfus}, $stats->{$folder}{nword});
+        $nsent += $stats->{$folder}{nsent};
+        $ntok += $stats->{$folder}{ntok};
+        $nfus += $stats->{$folder}{nfus};
+        $nword += $stats->{$folder}{nword};
+    }
+    add_table_row(\@table, \@maxl, 'TOTAL', $nsent, $ntok, $nfus, $nword);
+    return ($nsent, $ntok, $nfus, $nword, \@table, \@maxl);
+}
+
+
+
+#------------------------------------------------------------------------------
+# Adds a table row and updates maximum lengths of cells.
+#------------------------------------------------------------------------------
+sub add_table_row
+{
+    my $table = shift; # array reference
+    my $maxl = shift; # array reference
+    my @tablerow = @_;
+    for(my $i = 0; $i <= $#tablerow; $i++)
+    {
+        $maxl->[$i] = max($maxl->[$i], length($tablerow[$i]));
+    }
+    push(@{$table}, \@tablerow);
+}
+
+
+
+#------------------------------------------------------------------------------
+# Returns maximum of two numbers.
+#------------------------------------------------------------------------------
+sub max
+{
+    my $x = shift;
+    my $y = shift;
+    return $y > $x ? $y : $x;
+}
+
+
+
+#------------------------------------------------------------------------------
+# Compares the new release with the previous one in terms of treebank sizes.
+# Significant changes should be reported. Especially if a treebank shrank,
+# it may be a sign of an error. The function prints report to STDOUT along the
+# way but it also returns a preformatted changelog that can be used in the
+# release announcement.
+#------------------------------------------------------------------------------
+sub compare_with_previous_release
+{
+    my $oldpath = shift;
+    my $newstats = shift;
+    my $folder_codes_names = shift;
+    my $languages_from_yaml = shift;
+    print("Collecting statistics of $oldpath...\n");
+    my $oldstats = collect_statistics_about_ud_release($oldpath);
+    my @oldtreebanks = sort(keys(%{$oldstats}));
+    my @newtreebanks = sort(keys(%{$newstats}));
+    foreach my $t (@oldtreebanks)
+    {
+        if($oldstats->{$t}{ntok}  != $newstats->{$t}{ntok}  ||
+           $oldstats->{$t}{nword} != $newstats->{$t}{nword} ||
+           $oldstats->{$t}{nfus}  != $newstats->{$t}{nfus}  ||
+           $oldstats->{$t}{nsent} != $newstats->{$t}{nsent})
+        {
+            my $pad = ' ' x (length($t)-5);
+            my $diff = $newstats->{$t}{nword}-$oldstats->{$t}{nword};
+            my $sign = $diff > 0 ? '+' : $diff < 0 ? '–' : '';
+            my $pct = $diff ? sprintf(" ==> %s%d%%", $sign, abs($diff)/$oldstats->{$t}{nword}*100+0.5) : '';
+            print("$l\tt=$oldstats->{$t}{ntok}\tw=$oldstats->{$t}{nword}\tf=$oldstats->{$t}{nfus}\ts=$oldstats->{$t}{nsent}\n");
+            print(" NOW:$pad\tt=$newstats->{$t}{ntok}\tw=$newstats->{$t}{nword}\tf=$newstats->{$t}{nfus}\ts=$newstats->{$t}{nsent}\t$pct\n");
+        }
+    }
+    print("\n");
+    # Get the list of languages that are new in this release.
+    my %oldlanguages;
+    my %newlanguages;
+    foreach my $t (@oldtreebanks)
+    {
+        if(exists($folder_codes_names->{$t}))
+        {
+            my $language = $folder_codes_names->{$t}{lname};
+            if(!exists($oldlanguages{$language}))
+            {
+                $oldlanguages{$language} = $folder_codes_names->{$t};
+            }
+        }
+        else
+        {
+            my $record = get_folder_codes_and_names($t, $languages_from_yaml);
+            if(defined($record))
+            {
+                my $language = $record->{lname};
+                if(!exists($oldlanguages{$language}))
+                {
+                    $oldlanguages{$language} = $record;
+                }
+            }
+        }
+    }
+    foreach my $t (@newtreebanks)
+    {
+        my $language = $folder_codes_names->{$t}{lname};
+        if(!exists($oldlanguages{$language}) && !exists($newlanguages{$language}))
+        {
+            $newlanguages{$language} = $folder_codes_names->{$t};
+        }
+    }
+    # Treebanks can appear, disappear and reappear. Get the list of all treebanks
+    # that are part either of this or of the previous release.
+    my %oldnewtreebanks;
+    foreach my $t (@oldtreebanks, @newtreebanks)
+    {
+        $oldnewtreebanks{$t}++;
+    }
+    my @oldnewtreebanks = sort(keys(%oldnewtreebanks));
+    # Find treebanks whose size has changed by more than 10%.
+    my @changedsize;
+    my $codemaxl = 0;
+    my $namemaxl = 0;
+    my $oldmaxl = 0;
+    my $newmaxl = 0;
+    foreach my $t (@oldnewtreebanks)
+    {
+        my $oldsize = exists($oldstats->{$t}) ? $oldstats->{$t}{nword} : 0;
+        my $newsize = exists($newstats->{$t}) ? $newstats->{$t}{nword} : 0;
+        if($newsize > $oldsize * 1.1 || $newsize < $oldsize * 0.9)
+        {
+            # For retired or renamed old treebanks we may not have the hname yet.
+            my $hname;
+            if(exists($folder_codes_names->{$t}))
+            {
+                $hname = $folder_codes_names->{$t}{hname};
+            }
+            else
+            {
+                my $record = get_folder_codes_and_names($t, $languages_from_yaml);
+                if(defined($record))
+                {
+                    # We could add the record about the old treebank to the database.
+                    # But it could be dangerous because elsewhere we assume that the
+                    # database contains exactly those treebanks that are going to be
+                    # released now.
+                    #$folder_codes_names{$t} = $record;
+                    $hname = $record->{hname};
+                }
+                else
+                {
+                    $hname = 'UNKNOWN';
+                }
+            }
+            my %record =
+            (
+                'code' => $t,
+                'name' => $hname,
+                'old'  => $oldsize,
+                'new'  => $newsize
+            );
+            push(@changedsize, \%record);
+            $codemaxl = length($t) if(length($t) > $codemaxl);
+            $namemaxl = length($record{name}) if(length($record{name}) > $namemaxl);
+            $oldmaxl = length($oldsize) if(length($oldsize) > $oldmaxl);
+            $newmaxl = length($newsize) if(length($newsize) > $newmaxl);
+        }
+    }
+    my $nchangedsize = scalar(@changedsize);
+    my $changelog = "The size of the following $nchangedsize treebanks changed significantly since the last release:\n";
+    foreach my $r (sort {$a->{name} cmp $b->{name}} (@changedsize))
+    {
+        my $padding = ' ' x ($namemaxl - length($r->{name}));
+        $changelog .= sprintf("    %s: %${oldmaxl}d → %${newmaxl}d\n", $r->{name}.$padding, $r->{old}, $r->{new}); # right arrow is \x{2192}
+    }
+    return ($changelog, \%newlanguages);
 }
 
 
@@ -532,8 +715,11 @@ sub get_announcement
     my $next_release_available_in = shift; # 'March 2017'
     my $contlistref = shift;
     my $changelog = shift;
-    my @release_list   =   ('1.0', '1.1', '1.2', '1.3', '1.4', '2.0', '2.1',  '2.2', '2.3', '2.4', '2.5',   '2.6',  '2.7',     '2.8',     '2.9',    '2.10',   '2.11',     '2.12',    '2.13',    '2.14');
-    my @nth_vocabulary = qw(first  second third  fourth fifth  sixth  seventh eighth ninth  tenth  eleventh twelfth thirteenth fourteenth fifteenth sixteenth seventeenth eighteenth nineteenth twentieth);
+    my $n_sentences = shift;
+    my $n_tokens = shift;
+    my $n_words = shift;
+    my @release_list   = ('1.0',   '1.1',    '1.2',    '1.3',    '1.4',   '2.0',   '2.1',     '2.2',    '2.3',   '2.4',   '2.5',      '2.6',     '2.7',        '2.8',        '2.9',       '2.10',      '2.11',        '2.12',       '2.13',       '2.14',      '2.15',         '2.16',          '2.17',         '2.18',          '2.19');
+    my @nth_vocabulary = ('first', 'second', 'third',  'fourth', 'fifth', 'sixth', 'seventh', 'eighth', 'ninth', 'tenth', 'eleventh', 'twelfth', 'thirteenth', 'fourteenth', 'fifteenth', 'sixteenth', 'seventeenth', 'eighteenth', 'nineteenth', 'twentieth', 'twenty-first', 'twenty-second', 'twenty-third', 'twenty-fourth', 'twenty-fifth');
     my $nth;
     for(my $i = 0; $i<=$#release_list; $i++)
     {
@@ -556,13 +742,15 @@ sub get_announcement
     my @contributors = @{$contlistref};
     my $contributors = join(', ', @contributors);
     my $text = <<EOF
-We are very happy to announce the $nth release of annotated treebanks in Universal Dependencies, v$release, available at http://universaldependencies.org/.
+We are very happy to announce the $nth release of annotated treebanks in Universal Dependencies, v$release, available at https://universaldependencies.org/.
 
 Universal Dependencies is a project that seeks to develop cross-linguistically consistent treebank annotation for many languages with the goal of facilitating multilingual parser development, cross-lingual learning, and parsing research from a language typology perspective (de Marneffe et al., 2021; Nivre et al., 2020). The annotation scheme is based on (universal) Stanford dependencies (de Marneffe et al., 2006, 2008, 2014), Google universal part-of-speech tags (Petrov et al., 2012), and the Interset interlingua for morphosyntactic tagsets (Zeman, 2008). The general philosophy is to provide a universal inventory of categories and guidelines to facilitate consistent annotation of similar constructions across languages, while allowing language-specific extensions when necessary.
 
 The $n_treebanks treebanks in v$release are annotated according to version $guidelines_version of the UD guidelines and represent the following $n_languages languages: $languages. The $n_languages languages belong to $n_families families: $families. Depending on the language, the treebanks range in size from $min_size to $max_size. We expect the next release to be available in $next_release_available_in.
 
 $changelog
+In total, the new release contains $n_sentences sentences, $n_tokens surface tokens and $n_words syntactic words.
+
 $contributors
 
 
