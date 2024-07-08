@@ -1,3 +1,6 @@
 [submodule "UD-HDT-2.0"]
 	path = UD-HDT-2.0
 	url = git@github.com:LeonieWeissweiler/UD-HDT-2.0.git
+[submodule "conllueditor"]
+	path = conllueditor
+	url = git@github.com:mainlp/conllueditor.git
